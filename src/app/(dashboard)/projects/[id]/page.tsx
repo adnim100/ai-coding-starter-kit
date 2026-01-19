@@ -30,6 +30,7 @@ import { Label } from "@/components/ui/label";
 import { AudioList } from "@/components/projects/audio-list";
 import { JobTable } from "@/components/projects/job-table";
 import { TagEditor } from "@/components/projects/tag-editor";
+import { AudioDropzone } from "@/components/upload/audio-dropzone";
 import { Project } from "@/lib/types";
 import { toast } from "sonner";
 
@@ -48,6 +49,7 @@ export default function ProjectDetailPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
+  const [audioType, setAudioType] = useState<'MONO' | 'STEREO'>('MONO');
 
   useEffect(() => {
     async function fetchProject() {
@@ -134,6 +136,12 @@ export default function ProjectDetailPage() {
   const handleViewTranscript = (jobId: string) => {
     // TODO: Navigate to transcript view
     console.log("View transcript:", jobId);
+  };
+
+  const handleUploadComplete = (audioFileIds: string[]) => {
+    toast.success(`${audioFileIds.length} Datei(en) hochgeladen`);
+    // Refresh project to show new files
+    window.location.reload();
   };
 
   const hasCompletedJobs = project?.jobs.some(j => j.status === 'completed');
@@ -271,6 +279,51 @@ export default function ProjectDetailPage() {
       </div>
 
       <Separator />
+
+      {/* Audio Upload */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Audio hochladen</CardTitle>
+          <CardDescription>
+            Laden Sie Audio-Dateien für die Transkription hoch
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-4">
+            <Label>Audio-Typ:</Label>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="audioType"
+                  value="MONO"
+                  checked={audioType === 'MONO'}
+                  onChange={() => setAudioType('MONO')}
+                  className="w-4 h-4"
+                />
+                <span>Mono (1 Sprecher)</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="audioType"
+                  value="STEREO"
+                  checked={audioType === 'STEREO'}
+                  onChange={() => setAudioType('STEREO')}
+                  className="w-4 h-4"
+                />
+                <span>Stereo (mehrere Sprecher)</span>
+              </label>
+            </div>
+          </div>
+          <AudioDropzone
+            projectId={projectId}
+            audioType={audioType}
+            onUploadComplete={handleUploadComplete}
+            maxFiles={10}
+          />
+        </CardContent>
+      </Card>
 
       {/* Audio Files */}
       <Card>

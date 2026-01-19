@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, ArrowUpDown } from "lucide-react";
+import { Plus, ArrowUpDown, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -17,141 +17,86 @@ import { SearchBar } from "@/components/dashboard/search-bar";
 import { FilterDropdown } from "@/components/dashboard/filter-dropdown";
 import { ProjectGrid } from "@/components/dashboard/project-grid";
 import { Project, ProjectStatus, SortOption } from "@/lib/types";
-
-// Mock data - Replace with actual API calls
-const mockProjects: Project[] = [
-  {
-    id: "1",
-    name: "Interview mit CEO",
-    description: "Wichtiges Interview für den Jahresbericht",
-    status: "completed",
-    tags: ["Interview", "Deutsch"],
-    audioFiles: [
-      {
-        id: "a1",
-        name: "interview_ceo.mp3",
-        size: 5242880,
-        duration: 1800,
-        type: "mp3",
-        url: "/audio/sample.mp3",
-        uploadedAt: new Date("2025-01-15")
-      }
-    ],
-    jobs: [
-      {
-        id: "j1",
-        providerId: "openai",
-        providerName: "OpenAI Whisper",
-        status: "completed",
-        startedAt: new Date("2025-01-15T10:00:00"),
-        completedAt: new Date("2025-01-15T10:05:00"),
-        duration: 300
-      },
-      {
-        id: "j2",
-        providerId: "deepgram",
-        providerName: "Deepgram",
-        status: "completed",
-        startedAt: new Date("2025-01-15T10:00:00"),
-        completedAt: new Date("2025-01-15T10:04:30"),
-        duration: 270
-      }
-    ],
-    createdAt: new Date("2025-01-15"),
-    updatedAt: new Date("2025-01-15"),
-    isArchived: false
-  },
-  {
-    id: "2",
-    name: "Podcast Episode 42",
-    description: "Diskussion über AI und Zukunft der Arbeit",
-    status: "processing",
-    tags: ["Podcast", "Englisch"],
-    audioFiles: [
-      {
-        id: "a2",
-        name: "podcast_ep42.wav",
-        size: 10485760,
-        duration: 3600,
-        type: "wav",
-        url: "/audio/sample.wav",
-        uploadedAt: new Date("2025-01-18")
-      }
-    ],
-    jobs: [
-      {
-        id: "j3",
-        providerId: "openai",
-        providerName: "OpenAI Whisper",
-        status: "completed",
-        startedAt: new Date("2025-01-18T14:00:00"),
-        completedAt: new Date("2025-01-18T14:12:00"),
-        duration: 720
-      },
-      {
-        id: "j4",
-        providerId: "assemblyai",
-        providerName: "AssemblyAI",
-        status: "processing",
-        startedAt: new Date("2025-01-18T14:00:00")
-      }
-    ],
-    createdAt: new Date("2025-01-18"),
-    updatedAt: new Date("2025-01-18"),
-    isArchived: false
-  },
-  {
-    id: "3",
-    name: "Meeting Notes",
-    status: "failed",
-    tags: ["Meeting"],
-    audioFiles: [
-      {
-        id: "a3",
-        name: "meeting_jan_2025.mp3",
-        size: 3145728,
-        duration: 900,
-        type: "mp3",
-        url: "/audio/sample.mp3",
-        uploadedAt: new Date("2025-01-10")
-      }
-    ],
-    jobs: [
-      {
-        id: "j5",
-        providerId: "openai",
-        providerName: "OpenAI Whisper",
-        status: "failed",
-        startedAt: new Date("2025-01-10T09:00:00"),
-        error: "Audio quality too low"
-      }
-    ],
-    createdAt: new Date("2025-01-10"),
-    updatedAt: new Date("2025-01-10"),
-    isArchived: false
-  }
-];
+import { toast } from "sonner";
 
 export default function DashboardPage() {
   const router = useRouter();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedStatuses, setSelectedStatuses] = useState<ProjectStatus[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState<SortOption>("newest");
   const [showArchived, setShowArchived] = useState(false);
 
+  // Fetch projects from API
+  useEffect(() => {
+    async function fetchProjects() {
+      try {
+        setIsLoading(true);
+        const params = new URLSearchParams();
+        if (showArchived) params.set('archived', 'true');
+
+        const response = await fetch(`/api/projects?${params.toString()}`);
+        if (!response.ok) {
+          throw new Error("Fehler beim Laden der Projekte");
+        }
+        const data = await response.json();
+
+        // Map API response to Project type
+        const mappedProjects: Project[] = (data.projects || []).map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          description: p.description || "",
+          status: p.status?.toLowerCase() || "pending",
+          tags: p.tags || [],
+          audioFiles: (p.audio_files || []).map((af: any) => ({
+            id: af.id,
+            name: af.filename,
+            size: af.file_size || 0,
+            duration: af.duration_seconds || 0,
+            type: af.mime_type?.split('/')[1] || "audio",
+            url: af.storage_path || "",
+            uploadedAt: new Date(af.created_at)
+          })),
+          jobs: (p.transcription_jobs || []).map((job: any) => ({
+            id: job.id,
+            providerId: job.provider?.toLowerCase() || "unknown",
+            providerName: job.provider || "Unknown",
+            status: job.status?.toLowerCase() || "pending",
+            startedAt: job.started_at ? new Date(job.started_at) : undefined,
+            completedAt: job.completed_at ? new Date(job.completed_at) : undefined,
+            duration: job.processing_time_ms ? job.processing_time_ms / 1000 : undefined
+          })),
+          createdAt: new Date(p.created_at),
+          updatedAt: new Date(p.updated_at || p.created_at),
+          isArchived: p.archived || false,
+          totalCost: p.total_cost
+        }));
+
+        setProjects(mappedProjects);
+      } catch (error) {
+        console.error("Error fetching projects:", error);
+        toast.error("Fehler beim Laden der Projekte");
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    fetchProjects();
+  }, [showArchived]);
+
   // Get all available tags from projects
   const availableTags = useMemo(() => {
     const tagSet = new Set<string>();
-    mockProjects.forEach(project => {
+    projects.forEach(project => {
       project.tags.forEach(tag => tagSet.add(tag));
     });
     return Array.from(tagSet);
-  }, []);
+  }, [projects]);
 
   // Filter and sort projects
   const filteredProjects = useMemo(() => {
-    let filtered = mockProjects;
+    let filtered = projects;
 
     // Filter by archived status
     if (!showArchived) {
@@ -201,7 +146,7 @@ export default function DashboardPage() {
     });
 
     return filtered;
-  }, [searchQuery, selectedStatuses, selectedTags, sortBy, showArchived]);
+  }, [projects, searchQuery, selectedStatuses, selectedTags, sortBy]);
 
   const handleClearFilters = () => {
     setSelectedStatuses([]);
@@ -209,7 +154,46 @@ export default function DashboardPage() {
     setSearchQuery("");
   };
 
+  const handleDeleteProject = async (id: string) => {
+    try {
+      const response = await fetch(`/api/projects/${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("Fehler beim Löschen");
+      setProjects(projects.filter(p => p.id !== id));
+      toast.success("Projekt gelöscht");
+    } catch (error) {
+      toast.error("Fehler beim Löschen des Projekts");
+    }
+  };
+
+  const handleArchiveProject = async (id: string) => {
+    try {
+      const project = projects.find(p => p.id === id);
+      const response = await fetch(`/api/projects/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived: !project?.isArchived })
+      });
+      if (!response.ok) throw new Error("Fehler beim Archivieren");
+      setProjects(projects.map(p =>
+        p.id === id ? { ...p, isArchived: !p.isArchived } : p
+      ));
+      toast.success(project?.isArchived ? "Projekt wiederhergestellt" : "Projekt archiviert");
+    } catch (error) {
+      toast.error("Fehler beim Archivieren des Projekts");
+    }
+  };
+
   const activeFilterCount = selectedStatuses.length + selectedTags.length;
+
+  if (isLoading) {
+    return (
+      <div className="container mx-auto py-8 px-4">
+        <div className="flex items-center justify-center min-h-[400px]">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="container mx-auto py-8 px-4 space-y-8">
@@ -288,10 +272,10 @@ export default function DashboardPage() {
       <ProjectGrid
         projects={filteredProjects}
         onCreateNew={() => router.push("/projects/new")}
-        onRename={(id) => console.log("Rename project:", id)}
-        onEditTags={(id) => console.log("Edit tags:", id)}
-        onArchive={(id) => console.log("Archive project:", id)}
-        onDelete={(id) => console.log("Delete project:", id)}
+        onRename={(id) => router.push(`/projects/${id}`)}
+        onEditTags={(id) => router.push(`/projects/${id}`)}
+        onArchive={handleArchiveProject}
+        onDelete={handleDeleteProject}
       />
     </div>
   );
