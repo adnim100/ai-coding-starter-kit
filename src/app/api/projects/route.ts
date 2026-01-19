@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { createClient } from '@supabase/supabase-js'
 
+// Use service role key for server-side operations to bypass RLS
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
 // GET /api/projects - List all projects for authenticated user
@@ -84,9 +85,11 @@ export async function POST(request: NextRequest) {
 
     if (error) {
       console.error('Error creating project:', error)
-      return NextResponse.json({ error: 'Failed to create project' }, { status: 500 })
+      console.error('Error details:', JSON.stringify(error, null, 2))
+      return NextResponse.json({ error: 'Failed to create project', details: error.message }, { status: 500 })
     }
 
+    console.log('Project created successfully:', project?.id)
     return NextResponse.json({ project }, { status: 201 })
   } catch (error) {
     console.error('Error creating project:', error)

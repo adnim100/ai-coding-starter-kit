@@ -33,60 +33,7 @@ import { TagEditor } from "@/components/projects/tag-editor";
 import { Project } from "@/lib/types";
 import { toast } from "sonner";
 
-// Mock data - Replace with actual API call
-const mockProject: Project = {
-  id: "1",
-  name: "Interview mit CEO",
-  description: "Wichtiges Interview für den Jahresbericht",
-  status: "completed",
-  tags: ["Interview", "Deutsch"],
-  audioFiles: [
-    {
-      id: "a1",
-      name: "interview_ceo.mp3",
-      size: 5242880,
-      duration: 1800,
-      type: "mp3",
-      url: "/audio/sample.mp3",
-      uploadedAt: new Date("2025-01-15")
-    }
-  ],
-  jobs: [
-    {
-      id: "j1",
-      providerId: "openai",
-      providerName: "OpenAI Whisper",
-      status: "completed",
-      startedAt: new Date("2025-01-15T10:00:00"),
-      completedAt: new Date("2025-01-15T10:05:00"),
-      duration: 300
-    },
-    {
-      id: "j2",
-      providerId: "deepgram",
-      providerName: "Deepgram",
-      status: "completed",
-      startedAt: new Date("2025-01-15T10:00:00"),
-      completedAt: new Date("2025-01-15T10:04:30"),
-      duration: 270
-    },
-    {
-      id: "j3",
-      providerId: "assemblyai",
-      providerName: "AssemblyAI",
-      status: "completed",
-      startedAt: new Date("2025-01-15T10:00:00"),
-      completedAt: new Date("2025-01-15T10:06:00"),
-      duration: 360
-    }
-  ],
-  createdAt: new Date("2025-01-15"),
-  updatedAt: new Date("2025-01-15"),
-  isArchived: false,
-  totalCost: 1.25
-};
-
-const mockAvailableTags = ["Interview", "Meeting", "Podcast", "Deutsch", "Englisch"];
+const availableTags = ["Interview", "Meeting", "Podcast", "Deutsch", "Englisch", "Telefonat", "Konferenz"];
 
 export default function ProjectDetailPage() {
   const router = useRouter();
@@ -94,6 +41,8 @@ export default function ProjectDetailPage() {
   const projectId = params.id as string;
 
   const [project, setProject] = useState<Project | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedName, setEditedName] = useState("");
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -101,9 +50,62 @@ export default function ProjectDetailPage() {
   const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
 
   useEffect(() => {
-    // TODO: Replace with actual API call
-    setProject(mockProject);
-    setEditedName(mockProject.name);
+    async function fetchProject() {
+      try {
+        setIsLoading(true);
+        setError(null);
+        const response = await fetch(`/api/projects/${projectId}`);
+        if (!response.ok) {
+          if (response.status === 404) {
+            setError("Projekt nicht gefunden");
+          } else {
+            throw new Error("Fehler beim Laden des Projekts");
+          }
+          return;
+        }
+        const data = await response.json();
+        // Map API response to Project type
+        const mappedProject: Project = {
+          id: data.project.id,
+          name: data.project.name,
+          description: data.project.description || "",
+          status: data.project.status?.toLowerCase() || "pending",
+          tags: data.project.tags || [],
+          audioFiles: (data.project.audio_files || []).map((af: any) => ({
+            id: af.id,
+            name: af.filename,
+            size: af.file_size || 0,
+            duration: af.duration_seconds || 0,
+            type: af.mime_type?.split('/')[1] || "audio",
+            url: af.storage_path || "",
+            uploadedAt: new Date(af.created_at)
+          })),
+          jobs: (data.project.transcription_jobs || []).map((job: any) => ({
+            id: job.id,
+            providerId: job.provider?.toLowerCase() || "unknown",
+            providerName: job.provider || "Unknown",
+            status: job.status?.toLowerCase() || "pending",
+            startedAt: job.started_at ? new Date(job.started_at) : undefined,
+            completedAt: job.completed_at ? new Date(job.completed_at) : undefined,
+            duration: job.processing_time_ms ? job.processing_time_ms / 1000 : undefined
+          })),
+          createdAt: new Date(data.project.created_at),
+          updatedAt: new Date(data.project.updated_at || data.project.created_at),
+          isArchived: data.project.archived || false,
+          totalCost: data.project.total_cost
+        };
+        setProject(mappedProject);
+        setEditedName(mappedProject.name);
+      } catch (err) {
+        console.error("Error fetching project:", err);
+        setError(err instanceof Error ? err.message : "Unbekannter Fehler");
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    if (projectId) {
+      fetchProject();
+    }
   }, [projectId]);
 
   const handleSaveName = () => {
@@ -136,10 +138,36 @@ export default function ProjectDetailPage() {
 
   const hasCompletedJobs = project?.jobs.some(j => j.status === 'completed');
 
-  if (!project) {
+  if (isLoading) {
     return (
       <div className="container mx-auto py-8 px-4">
         <div className="text-center">Projekt wird geladen...</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="container mx-auto py-8 px-4">
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center space-y-4">
+              <p className="text-destructive">{error}</p>
+              <Button variant="outline" onClick={() => router.push("/dashboard")}>
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Zurück zum Dashboard
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!project) {
+    return (
+      <div className="container mx-auto py-8 px-4">
+        <div className="text-center">Projekt nicht gefunden</div>
       </div>
     );
   }
@@ -290,7 +318,7 @@ export default function ProjectDetailPage() {
         <CardContent>
           <TagEditor
             tags={project.tags}
-            availableTags={mockAvailableTags}
+            availableTags={availableTags}
             onTagsChange={handleUpdateTags}
           />
         </CardContent>

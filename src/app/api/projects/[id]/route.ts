@@ -2,173 +2,144 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { createClient } from '@supabase/supabase-js'
 
+// Use service role key for server-side operations to bypass RLS
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-type RouteContext = {
-  params: Promise<{ id: string }>
-}
-
-// GET /api/projects/[id] - Get project details
+// GET /api/projects/[id] - Get single project
 export async function GET(
   request: NextRequest,
-  { params }: RouteContext
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await auth()
-    const { id } = await params
 
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const { id } = await params
 
     const { data: project, error } = await supabase
       .from('projects')
       .select(`
         *,
         audio_files (*),
-        transcription_jobs (
-          *,
-          transcripts (
-            id,
-            full_text,
-            language,
-            confidence,
-            word_count
-          )
-        )
+        transcription_jobs (*)
       `)
       .eq('id', id)
       .eq('user_id', session.user.id)
       .single()
 
-    if (error || !project) {
+    if (error) {
+      console.error('Error fetching project:', error)
+      if (error.code === 'PGRST116') {
+        return NextResponse.json({ error: 'Project not found' }, { status: 404 })
+      }
+      return NextResponse.json({ error: 'Failed to fetch project' }, { status: 500 })
+    }
+
+    if (!project) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     }
 
     return NextResponse.json({ project })
   } catch (error) {
     console.error('Error fetching project:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch project' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Failed to fetch project' }, { status: 500 })
   }
 }
 
 // PATCH /api/projects/[id] - Update project
 export async function PATCH(
   request: NextRequest,
-  { params }: RouteContext
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await auth()
-    const { id } = await params
 
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
+    const { id } = await params
     const body = await request.json()
     const { name, description, tags, archived } = body
 
-    // Verify ownership
-    const { data: existing, error: existingError } = await supabase
-      .from('projects')
-      .select('id')
-      .eq('id', id)
-      .eq('user_id', session.user.id)
-      .single()
-
-    if (existingError || !existing) {
-      return NextResponse.json({ error: 'Project not found' }, { status: 404 })
-    }
-
-    const updateData: Record<string, unknown> = {
-      updated_at: new Date().toISOString(),
-    }
-
+    // Build update object with only provided fields
+    const updateData: Record<string, any> = {}
     if (name !== undefined) updateData.name = name.trim()
     if (description !== undefined) updateData.description = description?.trim() || null
     if (tags !== undefined) updateData.tags = tags
     if (archived !== undefined) updateData.archived = archived
+    updateData.updated_at = new Date().toISOString()
 
     const { data: project, error } = await supabase
       .from('projects')
       .update(updateData)
       .eq('id', id)
+      .eq('user_id', session.user.id)
       .select()
       .single()
 
     if (error) {
-      console.error('Update error:', error)
+      console.error('Error updating project:', error)
       return NextResponse.json({ error: 'Failed to update project' }, { status: 500 })
     }
 
     return NextResponse.json({ project })
   } catch (error) {
     console.error('Error updating project:', error)
-    return NextResponse.json(
-      { error: 'Failed to update project' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Failed to update project' }, { status: 500 })
   }
 }
 
 // DELETE /api/projects/[id] - Delete project
 export async function DELETE(
   request: NextRequest,
-  { params }: RouteContext
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await auth()
-    const { id } = await params
 
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Verify ownership
-    const { data: existing, error: existingError } = await supabase
-      .from('projects')
-      .select('id')
-      .eq('id', id)
-      .eq('user_id', session.user.id)
-      .single()
+    const { id } = await params
 
-    if (existingError || !existing) {
-      return NextResponse.json({ error: 'Project not found' }, { status: 404 })
-    }
+    // First delete related records (audio_files, transcription_jobs, etc.)
+    // These should cascade but let's be explicit
 
-    // Cancel any running jobs
+    // Delete transcription jobs
     await supabase
       .from('transcription_jobs')
-      .update({
-        status: 'CANCELLED',
-        completed_at: new Date().toISOString(),
-      })
+      .delete()
       .eq('project_id', id)
-      .eq('status', 'PROCESSING')
 
-    // Delete project (cascade will delete related records if configured)
+    // Delete audio files
+    await supabase
+      .from('audio_files')
+      .delete()
+      .eq('project_id', id)
+
+    // Delete the project
     const { error } = await supabase
       .from('projects')
       .delete()
       .eq('id', id)
+      .eq('user_id', session.user.id)
 
     if (error) {
-      console.error('Delete error:', error)
+      console.error('Error deleting project:', error)
       return NextResponse.json({ error: 'Failed to delete project' }, { status: 500 })
     }
 
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('Error deleting project:', error)
-    return NextResponse.json(
-      { error: 'Failed to delete project' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Failed to delete project' }, { status: 500 })
   }
 }
