@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { prisma } from '@/lib/prisma'
-import { authOptions } from '@/lib/auth'
+import { auth } from '@/lib/auth'
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 type RouteContext = {
-  params: { id: string }
+  params: Promise<{ id: string }>
 }
 
 // GET /api/projects/[id] - Get project details
@@ -13,35 +17,34 @@ export async function GET(
   { params }: RouteContext
 ) {
   try {
-    const session = await getServerSession(authOptions)
+    const session = await auth()
+    const { id } = await params
 
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const project = await prisma.project.findFirst({
-      where: {
-        id: params.id,
-        userId: session.user.id,
-      },
-      include: {
-        audioFiles: true,
-        jobs: {
-          include: {
-            transcript: {
-              include: {
-                segments: {
-                  orderBy: { orderIndex: 'asc' },
-                  take: 10, // First 10 segments for preview
-                },
-              },
-            },
-          },
-        },
-      },
-    })
+    const { data: project, error } = await supabase
+      .from('projects')
+      .select(`
+        *,
+        audio_files (*),
+        transcription_jobs (
+          *,
+          transcripts (
+            id,
+            full_text,
+            language,
+            confidence,
+            word_count
+          )
+        )
+      `)
+      .eq('id', id)
+      .eq('user_id', session.user.id)
+      .single()
 
-    if (!project) {
+    if (error || !project) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     }
 
@@ -61,7 +64,8 @@ export async function PATCH(
   { params }: RouteContext
 ) {
   try {
-    const session = await getServerSession(authOptions)
+    const session = await auth()
+    const { id } = await params
 
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -71,27 +75,37 @@ export async function PATCH(
     const { name, description, tags, archived } = body
 
     // Verify ownership
-    const existing = await prisma.project.findFirst({
-      where: {
-        id: params.id,
-        userId: session.user.id,
-      },
-    })
+    const { data: existing, error: existingError } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('id', id)
+      .eq('user_id', session.user.id)
+      .single()
 
-    if (!existing) {
+    if (existingError || !existing) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     }
 
-    const project = await prisma.project.update({
-      where: { id: params.id },
-      data: {
-        ...(name !== undefined && { name: name.trim() }),
-        ...(description !== undefined && { description: description?.trim() || null }),
-        ...(tags !== undefined && { tags }),
-        ...(archived !== undefined && { archived }),
-        updatedAt: new Date(),
-      },
-    })
+    const updateData: Record<string, unknown> = {
+      updated_at: new Date().toISOString(),
+    }
+
+    if (name !== undefined) updateData.name = name.trim()
+    if (description !== undefined) updateData.description = description?.trim() || null
+    if (tags !== undefined) updateData.tags = tags
+    if (archived !== undefined) updateData.archived = archived
+
+    const { data: project, error } = await supabase
+      .from('projects')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Update error:', error)
+      return NextResponse.json({ error: 'Failed to update project' }, { status: 500 })
+    }
 
     return NextResponse.json({ project })
   } catch (error) {
@@ -109,45 +123,45 @@ export async function DELETE(
   { params }: RouteContext
 ) {
   try {
-    const session = await getServerSession(authOptions)
+    const session = await auth()
+    const { id } = await params
 
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     // Verify ownership
-    const existing = await prisma.project.findFirst({
-      where: {
-        id: params.id,
-        userId: session.user.id,
-      },
-      include: {
-        jobs: { where: { status: 'PROCESSING' } },
-      },
-    })
+    const { data: existing, error: existingError } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('id', id)
+      .eq('user_id', session.user.id)
+      .single()
 
-    if (!existing) {
+    if (existingError || !existing) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     }
 
-    // Cancel running jobs before deletion
-    if (existing.jobs.length > 0) {
-      await prisma.transcriptionJob.updateMany({
-        where: {
-          projectId: params.id,
-          status: 'PROCESSING',
-        },
-        data: {
-          status: 'CANCELLED',
-          completedAt: new Date(),
-        },
+    // Cancel any running jobs
+    await supabase
+      .from('transcription_jobs')
+      .update({
+        status: 'CANCELLED',
+        completed_at: new Date().toISOString(),
       })
-    }
+      .eq('project_id', id)
+      .eq('status', 'PROCESSING')
 
-    // Delete project (cascade will delete related records)
-    await prisma.project.delete({
-      where: { id: params.id },
-    })
+    // Delete project (cascade will delete related records if configured)
+    const { error } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      console.error('Delete error:', error)
+      return NextResponse.json({ error: 'Failed to delete project' }, { status: 500 })
+    }
 
     return NextResponse.json({ success: true })
   } catch (error) {

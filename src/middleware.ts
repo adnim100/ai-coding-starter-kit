@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { getToken } from "next-auth/jwt";
+import { auth } from "@/lib/auth";
 
 // Define protected routes
 const PROTECTED_ROUTES = [
@@ -8,41 +8,34 @@ const PROTECTED_ROUTES = [
   "/projects",
   "/settings",
   "/api/projects",
-  "/api/transcriptions",
+  "/api/transcription",
   "/api/audio",
-  "/api/settings",
+  "/api/api-keys",
 ];
 
 // Define public routes that should redirect to dashboard if authenticated
 const PUBLIC_AUTH_ROUTES = [
-  "/auth/signin",
-  "/auth/signup",
-  "/auth/forgot-password",
+  "/login",
+  "/register",
+  "/forgot-password",
 ];
 
 // Define routes that are always public
 const PUBLIC_ROUTES = [
   "/",
-  "/auth/error",
-  "/auth/verify-request",
+  "/verify-email",
+  "/reset-password",
   "/api/auth",
 ];
 
-export async function middleware(request: NextRequest) {
+export default auth((request) => {
   const { pathname } = request.nextUrl;
+  const isAuthenticated = !!request.auth;
 
   // Check if the route is always public
   if (PUBLIC_ROUTES.some((route) => pathname.startsWith(route))) {
     return NextResponse.next();
   }
-
-  // Get the token (session)
-  const token = await getToken({
-    req: request,
-    secret: process.env.NEXTAUTH_SECRET,
-  });
-
-  const isAuthenticated = !!token;
 
   // Check if accessing a protected route
   const isProtectedRoute = PROTECTED_ROUTES.some((route) =>
@@ -54,9 +47,9 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith(route)
   );
 
-  // Redirect to signin if accessing protected route while not authenticated
+  // Redirect to login if accessing protected route while not authenticated
   if (isProtectedRoute && !isAuthenticated) {
-    const signInUrl = new URL("/auth/signin", request.url);
+    const signInUrl = new URL("/login", request.url);
     signInUrl.searchParams.set("callbackUrl", pathname);
     return NextResponse.redirect(signInUrl);
   }
@@ -66,23 +59,8 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
-  // Check if account is scheduled for deletion
-  if (isAuthenticated && token.accountPendingDeletion) {
-    // Allow access to settings to cancel deletion
-    if (pathname.startsWith("/settings")) {
-      return NextResponse.next();
-    }
-
-    // Redirect other routes to settings with warning
-    if (isProtectedRoute && !pathname.startsWith("/settings")) {
-      const settingsUrl = new URL("/settings/account", request.url);
-      settingsUrl.searchParams.set("warning", "deletion-pending");
-      return NextResponse.redirect(settingsUrl);
-    }
-  }
-
   return NextResponse.next();
-}
+});
 
 // Configure which routes the middleware should run on
 export const config = {

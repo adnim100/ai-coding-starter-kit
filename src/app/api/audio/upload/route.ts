@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { auth } from '@/lib/auth'
+import { createClient } from '@supabase/supabase-js'
 import { uploadAudioFile } from '@/lib/storage'
-import { z } from 'zod'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024 // 500MB
 const ALLOWED_TYPES = [
@@ -20,7 +23,7 @@ const ALLOWED_TYPES = [
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
+    const session = await auth()
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
@@ -40,14 +43,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify project ownership
-    const project = await prisma.project.findFirst({
-      where: {
-        id: projectId,
-        userId: session.user.id,
-      },
-    })
+    const { data: project, error: projectError } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('id', projectId)
+      .eq('user_id', session.user.id)
+      .single()
 
-    if (!project) {
+    if (projectError || !project) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     }
 
@@ -80,33 +83,40 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Analyze audio metadata (simplified - in production use ffmpeg)
-    const duration = await getAudioDuration(file)
-
     // Save to database
-    const audioFile = await prisma.audioFile.create({
-      data: {
-        projectId,
+    const { data: audioFile, error: insertError } = await supabase
+      .from('audio_files')
+      .insert({
+        project_id: projectId,
         filename: file.name,
-        storagePath: uploadResult.path,
-        storageUrl: uploadResult.url,
-        fileSize: file.size,
-        mimeType: file.type,
-        durationSeconds: duration,
-        audioType: audioType as 'MONO' | 'STEREO',
+        storage_path: uploadResult.path,
+        storage_url: uploadResult.url,
+        file_size: file.size,
+        mime_type: file.type,
+        duration_seconds: null, // Can be calculated client-side or via serverless function
+        audio_type: audioType,
         channels: audioType === 'STEREO' ? 2 : 1,
-      },
-    })
+      })
+      .select('id, filename, storage_url, file_size, duration_seconds, audio_type')
+      .single()
+
+    if (insertError) {
+      console.error('Database insert error:', insertError)
+      return NextResponse.json(
+        { error: 'Failed to save audio file record' },
+        { status: 500 }
+      )
+    }
 
     return NextResponse.json({
       success: true,
       audioFile: {
         id: audioFile.id,
         filename: audioFile.filename,
-        url: audioFile.storageUrl,
-        size: audioFile.fileSize,
-        duration: audioFile.durationSeconds,
-        audioType: audioFile.audioType,
+        url: audioFile.storage_url,
+        size: audioFile.file_size,
+        duration: audioFile.duration_seconds,
+        audioType: audioFile.audio_type,
       },
     })
   } catch (error) {
@@ -115,33 +125,5 @@ export async function POST(request: NextRequest) {
       { error: 'Failed to upload audio file' },
       { status: 500 }
     )
-  }
-}
-
-/**
- * Get audio duration (simplified version)
- * In production, use ffmpeg or similar for accurate metadata
- */
-async function getAudioDuration(file: File): Promise<number | null> {
-  try {
-    // Create audio element to get duration
-    const arrayBuffer = await file.arrayBuffer()
-    const blob = new Blob([arrayBuffer], { type: file.type })
-    const url = URL.createObjectURL(blob)
-
-    return new Promise((resolve) => {
-      const audio = new Audio(url)
-      audio.addEventListener('loadedmetadata', () => {
-        URL.revokeObjectURL(url)
-        resolve(audio.duration)
-      })
-      audio.addEventListener('error', () => {
-        URL.revokeObjectURL(url)
-        resolve(null)
-      })
-    })
-  } catch (error) {
-    console.error('Duration extraction error:', error)
-    return null
   }
 }

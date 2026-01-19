@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { auth } from '@/lib/auth'
+import { createClient } from '@supabase/supabase-js'
 import { addTranscriptionJob } from '@/lib/queue'
 import { getProvider } from '@/lib/transcription'
 import { z } from 'zod'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 const startTranscriptionSchema = z.object({
   projectId: z.string().uuid(),
@@ -20,7 +24,7 @@ const startTranscriptionSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
+    const session = await auth()
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
@@ -29,42 +33,44 @@ export async function POST(request: NextRequest) {
     const validatedData = startTranscriptionSchema.parse(body)
 
     // Verify project ownership
-    const project = await prisma.project.findFirst({
-      where: {
-        id: validatedData.projectId,
-        userId: session.user.id,
-      },
-    })
+    const { data: project, error: projectError } = await supabase
+      .from('projects')
+      .select('id')
+      .eq('id', validatedData.projectId)
+      .eq('user_id', session.user.id)
+      .single()
 
-    if (!project) {
+    if (projectError || !project) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     }
 
     // Verify audio file
-    const audioFile = await prisma.audioFile.findFirst({
-      where: {
-        id: validatedData.audioFileId,
-        projectId: validatedData.projectId,
-      },
-    })
+    const { data: audioFile, error: audioError } = await supabase
+      .from('audio_files')
+      .select('id, storage_url')
+      .eq('id', validatedData.audioFileId)
+      .eq('project_id', validatedData.projectId)
+      .single()
 
-    if (!audioFile) {
+    if (audioError || !audioFile) {
       return NextResponse.json({ error: 'Audio file not found' }, { status: 404 })
     }
 
     // Get user's API keys for selected providers
-    const apiKeys = await prisma.apiKey.findMany({
-      where: {
-        userId: session.user.id,
-        provider: {
-          in: validatedData.providers,
-        },
-      },
-    })
+    const { data: apiKeys, error: keysError } = await supabase
+      .from('api_keys')
+      .select('id, provider, encrypted_key')
+      .eq('user_id', session.user.id)
+      .in('provider', validatedData.providers)
+
+    if (keysError) {
+      console.error('API keys fetch error:', keysError)
+      return NextResponse.json({ error: 'Failed to fetch API keys' }, { status: 500 })
+    }
 
     // Validate all required API keys are present
     const missingProviders = validatedData.providers.filter(
-      (provider) => !apiKeys.find((key) => key.provider === provider)
+      (provider) => !apiKeys?.find((key) => key.provider === provider)
     )
 
     if (missingProviders.length > 0) {
@@ -81,22 +87,29 @@ export async function POST(request: NextRequest) {
     const jobs = []
 
     for (const providerName of validatedData.providers) {
-      const apiKey = apiKeys.find((key) => key.provider === providerName)
+      const apiKey = apiKeys?.find((key) => key.provider === providerName)
       if (!apiKey) continue
 
       const provider = getProvider(providerName)
       if (!provider) continue
 
       // Create job record
-      const job = await prisma.transcriptionJob.create({
-        data: {
-          projectId: validatedData.projectId,
-          audioFileId: validatedData.audioFileId,
-          provider: providerName as any,
+      const { data: job, error: jobError } = await supabase
+        .from('transcription_jobs')
+        .insert({
+          project_id: validatedData.projectId,
+          audio_file_id: validatedData.audioFileId,
+          provider: providerName,
           status: 'QUEUED',
           config: validatedData.config || {},
-        },
-      })
+        })
+        .select('id, provider, status')
+        .single()
+
+      if (jobError || !job) {
+        console.error('Job creation error:', jobError)
+        continue
+      }
 
       // Add to queue
       await addTranscriptionJob({
@@ -104,9 +117,9 @@ export async function POST(request: NextRequest) {
         projectId: validatedData.projectId,
         audioFileId: validatedData.audioFileId,
         provider: providerName,
-        audioUrl: audioFile.storageUrl,
+        audioUrl: audioFile.storage_url,
         config: validatedData.config || {},
-        apiKey: apiKey.encryptedKey, // TODO: Decrypt in worker
+        apiKey: apiKey.encrypted_key,
         userId: session.user.id,
       })
 
@@ -114,10 +127,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Update project status
-    await prisma.project.update({
-      where: { id: validatedData.projectId },
-      data: { status: 'PROCESSING' },
-    })
+    await supabase
+      .from('projects')
+      .update({ status: 'PROCESSING' })
+      .eq('id', validatedData.projectId)
 
     return NextResponse.json({
       success: true,

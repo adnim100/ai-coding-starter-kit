@@ -1,42 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { auth } from '@/lib/auth'
+import { createClient } from '@supabase/supabase-js'
 import { getTranscriptionJobStatus } from '@/lib/queue'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { jobId: string } }
+  { params }: { params: Promise<{ jobId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions)
+    const session = await auth()
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const jobId = params.jobId
+    const { jobId } = await params
 
-    // Get job from database
-    const job = await prisma.transcriptionJob.findFirst({
-      where: {
-        id: jobId,
-        project: {
-          userId: session.user.id,
-        },
-      },
-      include: {
-        transcript: {
-          select: {
-            fullText: true,
-            language: true,
-            confidence: true,
-            wordCount: true,
-          },
-        },
-      },
-    })
+    // Get job from database with project ownership check
+    const { data: job, error } = await supabase
+      .from('transcription_jobs')
+      .select(`
+        *,
+        projects!inner (user_id),
+        transcripts (
+          full_text,
+          language,
+          confidence,
+          word_count
+        )
+      `)
+      .eq('id', jobId)
+      .eq('projects.user_id', session.user.id)
+      .single()
 
-    if (!job) {
+    if (error || !job) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 })
     }
 
@@ -51,13 +52,13 @@ export async function GET(
       provider: job.provider,
       status: job.status,
       progress: queueStatus?.progress,
-      errorMessage: job.errorMessage,
-      processingTimeMs: job.processingTimeMs,
-      costUsd: job.costUsd,
-      queuedAt: job.queuedAt,
-      startedAt: job.startedAt,
-      completedAt: job.completedAt,
-      transcript: job.transcript,
+      errorMessage: job.error_message,
+      processingTimeMs: job.processing_time_ms,
+      costUsd: job.cost_usd,
+      queuedAt: job.queued_at,
+      startedAt: job.started_at,
+      completedAt: job.completed_at,
+      transcript: job.transcripts?.[0] || null,
     })
   } catch (error) {
     console.error('Get job status error:', error)
