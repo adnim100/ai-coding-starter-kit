@@ -1,18 +1,9 @@
-import { Queue, QueueEvents, Worker, Job } from 'bullmq'
-import Redis from 'ioredis'
-import dotenv from 'dotenv'
-import path from 'path'
-
-// Load environment variables from .env.local
-dotenv.config({ path: path.resolve(process.cwd(), '.env.local') })
-
-// Redis connection
-const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379'
-console.log('[Queue] Connecting to Redis:', redisUrl.replace(/:[^:@]+@/, ':****@')) // Log URL with hidden password
-
-const connection = new Redis(redisUrl, {
-  maxRetriesPerRequest: null,
-})
+/**
+ * Queue module for transcription jobs
+ *
+ * This is a simplified version that works without Redis for initial deployment.
+ * In production, you would replace this with proper BullMQ + Redis setup.
+ */
 
 export interface TranscriptionJobData {
   jobId: string
@@ -50,69 +41,54 @@ export interface TranscriptionJobResult {
   costUsd?: number
 }
 
-// Create transcription queue
-export const transcriptionQueue = new Queue<TranscriptionJobData, TranscriptionJobResult>(
-  'transcription',
-  {
-    connection,
-    defaultJobOptions: {
-      attempts: 3,
-      backoff: {
-        type: 'exponential',
-        delay: 2000,
-      },
-      removeOnComplete: {
-        count: 1000, // Keep last 1000 completed jobs
-        age: 24 * 3600, // Keep for 24 hours
-      },
-      removeOnFail: {
-        count: 5000, // Keep last 5000 failed jobs
-      },
-    },
-  }
-)
-
-// Queue events for monitoring
-export const transcriptionQueueEvents = new QueueEvents('transcription', {
-  connection,
-})
+// In-memory job store (for development/MVP)
+// In production, replace with Redis + BullMQ
+const jobStore = new Map<string, {
+  data: TranscriptionJobData
+  status: 'queued' | 'processing' | 'completed' | 'failed'
+  progress?: number
+  result?: TranscriptionJobResult
+  createdAt: Date
+}>()
 
 /**
  * Add transcription job to queue
  */
 export async function addTranscriptionJob(data: TranscriptionJobData) {
-  const job = await transcriptionQueue.add(
-    `transcribe-${data.provider}-${data.jobId}`,
+  jobStore.set(data.jobId, {
     data,
-    {
-      jobId: data.jobId,
-    }
-  )
+    status: 'queued',
+    createdAt: new Date(),
+  })
 
-  return job
+  console.log(`[Queue] Job added: ${data.jobId} for provider ${data.provider}`)
+
+  // In production, this would be processed by a worker
+  // For now, we just store it and the status API routes can check it
+  return {
+    id: data.jobId,
+    data,
+  }
 }
 
 /**
  * Get job status
  */
 export async function getTranscriptionJobStatus(jobId: string) {
-  const job = await transcriptionQueue.getJob(jobId)
+  const job = jobStore.get(jobId)
   if (!job) return null
 
-  const state = await job.getState()
-  const progress = job.progress
-
   return {
-    id: job.id,
-    state,
-    progress,
+    id: jobId,
+    state: job.status,
+    progress: job.progress,
     data: job.data,
-    returnvalue: job.returnvalue,
-    failedReason: job.failedReason,
-    attemptsMade: job.attemptsMade,
-    timestamp: job.timestamp,
-    processedOn: job.processedOn,
-    finishedOn: job.finishedOn,
+    returnvalue: job.result,
+    failedReason: job.status === 'failed' ? 'Processing failed' : undefined,
+    attemptsMade: 1,
+    timestamp: job.createdAt.getTime(),
+    processedOn: job.status !== 'queued' ? job.createdAt.getTime() : undefined,
+    finishedOn: job.status === 'completed' || job.status === 'failed' ? Date.now() : undefined,
   }
 }
 
@@ -120,37 +96,51 @@ export async function getTranscriptionJobStatus(jobId: string) {
  * Cancel transcription job
  */
 export async function cancelTranscriptionJob(jobId: string) {
-  const job = await transcriptionQueue.getJob(jobId)
+  const job = jobStore.get(jobId)
   if (!job) return false
 
-  try {
-    await job.remove()
+  if (job.status === 'queued' || job.status === 'processing') {
+    jobStore.delete(jobId)
+    console.log(`[Queue] Job cancelled: ${jobId}`)
     return true
-  } catch (error) {
-    console.error('Failed to cancel job:', error)
-    return false
   }
+
+  return false
 }
 
 /**
  * Get queue metrics
  */
 export async function getQueueMetrics() {
-  const [waiting, active, completed, failed, delayed] = await Promise.all([
-    transcriptionQueue.getWaitingCount(),
-    transcriptionQueue.getActiveCount(),
-    transcriptionQueue.getCompletedCount(),
-    transcriptionQueue.getFailedCount(),
-    transcriptionQueue.getDelayedCount(),
-  ])
+  let waiting = 0
+  let active = 0
+  let completed = 0
+  let failed = 0
+
+  for (const job of jobStore.values()) {
+    switch (job.status) {
+      case 'queued':
+        waiting++
+        break
+      case 'processing':
+        active++
+        break
+      case 'completed':
+        completed++
+        break
+      case 'failed':
+        failed++
+        break
+    }
+  }
 
   return {
     waiting,
     active,
     completed,
     failed,
-    delayed,
-    total: waiting + active + completed + failed + delayed,
+    delayed: 0,
+    total: waiting + active + completed + failed,
   }
 }
 
@@ -158,10 +148,17 @@ export async function getQueueMetrics() {
  * Clean old jobs from queue
  */
 export async function cleanQueue(grace: number = 24 * 3600 * 1000) {
-  // grace period in milliseconds (default: 24 hours)
-  const cleaned = await transcriptionQueue.clean(grace, 1000)
+  const now = Date.now()
+  const cleaned: string[] = []
+
+  for (const [jobId, job] of jobStore.entries()) {
+    if (now - job.createdAt.getTime() > grace) {
+      if (job.status === 'completed' || job.status === 'failed') {
+        jobStore.delete(jobId)
+        cleaned.push(jobId)
+      }
+    }
+  }
+
   return cleaned
 }
-
-// Export connection for worker
-export { connection as redisConnection }

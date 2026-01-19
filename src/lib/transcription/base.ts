@@ -30,6 +30,7 @@ export interface UnifiedTranscript {
   language?: string
   wordCount: number
   avgConfidence?: number
+  confidence?: number  // Alias for avgConfidence
   segments: TranscriptSegment[]
   metadata?: {
     processingTimeMs: number

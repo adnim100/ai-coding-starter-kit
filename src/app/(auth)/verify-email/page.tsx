@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Mail, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 
-export default function VerifyEmailPage() {
+function VerifyEmailContent() {
   const searchParams = useSearchParams();
   const email = searchParams.get("email") || "";
   const [isLoading, setIsLoading] = useState(false);
@@ -111,5 +111,28 @@ export default function VerifyEmailPage() {
         </Alert>
       </CardContent>
     </Card>
+  );
+}
+
+function LoadingFallback() {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex justify-center mb-4">
+          <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center">
+            <Loader2 className="h-8 w-8 text-primary animate-spin" />
+          </div>
+        </div>
+        <CardTitle className="text-center">Laden...</CardTitle>
+      </CardHeader>
+    </Card>
+  );
+}
+
+export default function VerifyEmailPage() {
+  return (
+    <Suspense fallback={<LoadingFallback />}>
+      <VerifyEmailContent />
+    </Suspense>
   );
 }

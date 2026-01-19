@@ -176,11 +176,14 @@ export class SpeechmaticsProvider extends TranscriptionProvider {
         sequenceNumber: index,
       })) || []
 
+      const fullText = segments.map((s: any) => s.text).join(' ')
       return {
-        fullText: segments.map((s: any) => s.text).join(' '),
-        language: result.metadata?.language || 'en',
-        confidence: undefined,
+        provider: this.name,
+        status: 'completed',
+        fullText,
+        wordCount: fullText.split(/\s+/).filter(Boolean).length,
         segments,
+        language: result.metadata?.language || 'en',
       }
     } catch (error) {
       this.handleError(error, 'getTranscript')

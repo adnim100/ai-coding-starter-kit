@@ -147,11 +147,15 @@ export class GladiaProvider extends TranscriptionProvider {
         sequenceNumber: index,
       })) || []
 
+      const fullText = result.result?.transcription?.full_transcript || ''
       return {
-        fullText: result.result?.transcription?.full_transcript || '',
-        language: result.result?.language?.language_code || 'en',
-        confidence: result.result?.transcription?.confidence,
+        provider: this.name,
+        status: 'completed',
+        fullText,
+        wordCount: fullText.split(/\s+/).filter(Boolean).length,
         segments,
+        language: result.result?.language?.language_code || 'en',
+        avgConfidence: result.result?.transcription?.confidence,
       }
     } catch (error) {
       this.handleError(error, 'getTranscript')

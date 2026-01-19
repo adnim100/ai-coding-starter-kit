@@ -111,10 +111,14 @@ export class AssemblyAIProvider extends TranscriptionProvider {
         sequenceNumber: index,
       })) || []
 
+      const fullText = transcript.text || ''
       return {
-        fullText: transcript.text || '',
+        provider: this.name,
+        status: 'completed',
+        fullText,
         language: transcript.language_code || 'en',
-        confidence: transcript.confidence,
+        wordCount: fullText.split(/\s+/).filter(Boolean).length,
+        avgConfidence: transcript.confidence ?? undefined,
         segments,
       }
     } catch (error) {

@@ -1,29 +1,18 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "./auth";
-import { PrismaClient } from "@prisma/client";
+import { auth } from "./auth";
 import bcrypt from "bcryptjs";
 import { TOTP } from "otpauth";
+import { createClient } from "@supabase/supabase-js";
 
-// Prisma Client Singleton
-const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined;
-};
-
-const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
-  });
-
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
-}
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 /**
  * Get the current authenticated user session (server-side)
  */
 export async function getCurrentUser() {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   return session?.user;
 }
 
@@ -96,6 +85,18 @@ export function verifyTotpCode(secret: string, code: string): boolean {
 }
 
 /**
+ * Generate a random alphanumeric code
+ */
+function generateRandomCode(length: number): string {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let code = "";
+  for (let i = 0; i < length; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+}
+
+/**
  * Generate recovery codes for 2FA
  */
 export async function generateRecoveryCodes(
@@ -111,12 +112,10 @@ export async function generateRecoveryCodes(
 
     // Hash and store in database
     const codeHash = await hashPassword(code);
-    await prisma.recoveryCode.create({
-      data: {
-        userId,
-        codeHash,
-        used: false,
-      },
+    await supabase.from("recovery_codes").insert({
+      user_id: userId,
+      code_hash: codeHash,
+      used: false,
     });
   }
 
@@ -130,24 +129,25 @@ export async function verifyRecoveryCode(
   userId: string,
   code: string
 ): Promise<boolean> {
-  const recoveryCodes = await prisma.recoveryCode.findMany({
-    where: {
-      userId,
-      used: false,
-    },
-  });
+  const { data: recoveryCodes } = await supabase
+    .from("recovery_codes")
+    .select("id, code_hash")
+    .eq("user_id", userId)
+    .eq("used", false);
+
+  if (!recoveryCodes) return false;
 
   for (const recoveryCode of recoveryCodes) {
-    const isValid = await verifyPassword(code, recoveryCode.codeHash);
+    const isValid = await verifyPassword(code, recoveryCode.code_hash);
     if (isValid) {
       // Mark as used
-      await prisma.recoveryCode.update({
-        where: { id: recoveryCode.id },
-        data: {
+      await supabase
+        .from("recovery_codes")
+        .update({
           used: true,
-          usedAt: new Date(),
-        },
-      });
+          used_at: new Date().toISOString(),
+        })
+        .eq("id", recoveryCode.id);
       return true;
     }
   }
@@ -156,27 +156,16 @@ export async function verifyRecoveryCode(
 }
 
 /**
- * Generate a random alphanumeric code
- */
-function generateRandomCode(length: number): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let code = "";
-  for (let i = 0; i < length; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
-}
-
-/**
  * Check if user has 2FA enabled
  */
 export async function isTwoFactorEnabled(userId: string): Promise<boolean> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { totpEnabled: true },
-  });
+  const { data: user } = await supabase
+    .from("users")
+    .select("totp_enabled")
+    .eq("id", userId)
+    .single();
 
-  return user?.totpEnabled ?? false;
+  return user?.totp_enabled ?? false;
 }
 
 /**
@@ -186,29 +175,27 @@ export async function enableTwoFactor(
   userId: string,
   totpSecret: string
 ): Promise<void> {
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      totpSecret,
-      totpEnabled: true,
-    },
-  });
+  await supabase
+    .from("users")
+    .update({
+      totp_secret: totpSecret,
+      totp_enabled: true,
+    })
+    .eq("id", userId);
 }
 
 /**
  * Disable 2FA for a user
  */
 export async function disableTwoFactor(userId: string): Promise<void> {
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      totpSecret: null,
-      totpEnabled: false,
-    },
-  });
+  await supabase
+    .from("users")
+    .update({
+      totp_secret: null,
+      totp_enabled: false,
+    })
+    .eq("id", userId);
 
   // Delete all recovery codes
-  await prisma.recoveryCode.deleteMany({
-    where: { userId },
-  });
+  await supabase.from("recovery_codes").delete().eq("user_id", userId);
 }
