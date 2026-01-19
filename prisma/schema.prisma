@@ -1,0 +1,310 @@
+// ProjectHub Database Schema
+// This schema defines all tables for the multi-provider transcription comparison tool
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// User & Authentication
+// ============================================
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  emailVerified     DateTime?
+  passwordHash      String?   // null for OAuth-only accounts
+  name              String?
+  profileImageUrl   String?
+
+  // 2FA
+  totpSecret        String?
+  totpEnabled       Boolean   @default(false)
+  recoveryCodes     RecoveryCode[]
+
+  // OAuth
+  oauthProviders    OAuthProvider[]
+
+  // Relations
+  projects          Project[]
+  apiKeys           ApiKey[]
+  sessions          Session[]
+  accounts          Account[]
+
+  // Account Deletion
+  scheduledDeletion DateTime?
+  deletionDays      Int       @default(30)
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([email])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionToken String   @unique
+  expires      DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model RecoveryCode {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String   // bcrypt hashed
+  used      Boolean  @default(false)
+  usedAt    DateTime?
+  usedIp    String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model OAuthProvider {
+  id              String @id @default(cuid())
+  userId          String
+  user            User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider        String // "google"
+  providerUserId  String
+  accessToken     String?
+  refreshToken    String?
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+}
+
+// ============================================
+// Projects & Audio
+// ============================================
+
+model Project {
+  id          String        @id @default(cuid())
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  status      ProjectStatus @default(PENDING)
+  tags        String[]      // Array of tags
+  archived    Boolean       @default(false)
+
+  audioFiles  AudioFile[]
+  jobs        TranscriptionJob[]
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([archived])
+}
+
+enum ProjectStatus {
+  PENDING      // Created, no jobs yet
+  PROCESSING   // At least 1 job running
+  COMPLETED    // All jobs completed
+  FAILED       // All jobs failed
+  PARTIAL      // Some jobs successful, some failed
+}
+
+model AudioFile {
+  id            String     @id @default(cuid())
+  projectId     String
+  project       Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  fileName      String
+  fileSize      Int        // Bytes
+  duration      Float?     // Seconds
+  format        String     // "mp3", "wav", etc.
+  audioType     AudioType  // MONO, STEREO
+
+  storageUrl    String     // S3/Supabase Storage URL
+  retentionDays Int        @default(30)
+  deletionDate  DateTime?  // Upload + RetentionDays
+
+  createdAt     DateTime   @default(now())
+
+  @@index([projectId])
+  @@index([deletionDate])
+}
+
+enum AudioType {
+  MONO
+  STEREO
+}
+
+// ============================================
+// Transcription
+// ============================================
+
+model TranscriptionJob {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  audioFileId String
+  provider    Provider
+
+  status      JobStatus @default(QUEUED)
+
+  // Configuration
+  language    String?  // "de", "en", "auto"
+  features    Json     // { diarization: true, timestamps: true, confidence: true }
+  modelName   String?  // Provider-specific model
+
+  // Results
+  transcript  Transcript?
+
+  // Metadata
+  startedAt   DateTime?
+  completedAt DateTime?
+  duration    Int?     // Processing time in ms
+  cost        Float?   // USD
+
+  // Error Handling
+  errorType   String?
+  errorMessage String?
+  retryCount  Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([status])
+  @@index([provider])
+}
+
+enum Provider {
+  OPENAI_WHISPER
+  ASSEMBLYAI
+  GOOGLE_SPEECH
+  AWS_TRANSCRIBE
+  ELEVENLABS
+  DEEPGRAM
+  GLADIA
+  SPEECHMATICS
+  OPENROUTER
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model Transcript {
+  id            String              @id @default(cuid())
+  jobId         String              @unique
+  job           TranscriptionJob    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  fullText      String              @db.Text
+  language      String?
+  wordCount     Int?
+  avgConfidence Float?
+
+  segments      TranscriptSegment[]
+  comments      Comment[]
+
+  createdAt     DateTime            @default(now())
+
+  @@index([jobId])
+}
+
+model TranscriptSegment {
+  id           String     @id @default(cuid())
+  transcriptId String
+  transcript   Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+
+  startTime    Float      // Seconds
+  endTime      Float
+  text         String     @db.Text
+  confidence   Float?
+  speaker      String?    // "Speaker 1", "Speaker 2"
+
+  orderIndex   Int        // Order of segments
+
+  @@index([transcriptId])
+  @@index([orderIndex])
+}
+
+model Comment {
+  id           String     @id @default(cuid())
+  transcriptId String
+  transcript   Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+  userId       String
+
+  segmentId    String?    // Optional: Comment on specific segment
+  timestamp    Float?     // Optional: Timestamp in audio
+  selectedText String?    // Original text that was selected
+
+  content      String     @db.Text
+
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([transcriptId])
+  @@index([userId])
+}
+
+// ============================================
+// API Keys (User-specific)
+// ============================================
+
+model ApiKey {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider   Provider
+  keyValue   String   // AES-256 encrypted
+
+  isValid    Boolean  @default(true)
+  lastTested DateTime?
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+// ============================================
+// Email Verification Tokens
+// ============================================
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@index([expires])
+}
