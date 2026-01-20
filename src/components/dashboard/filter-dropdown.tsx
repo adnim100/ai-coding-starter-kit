@@ -24,10 +24,11 @@ interface FilterDropdownProps {
 }
 
 const statusLabels: Record<ProjectStatus, string> = {
-  processing: "Processing",
-  completed: "Completed",
-  failed: "Failed",
-  partial: "Partial"
+  pending: "Ausstehend",
+  processing: "In Bearbeitung",
+  completed: "Abgeschlossen",
+  failed: "Fehlgeschlagen",
+  partial: "Teilweise"
 };
 
 export function FilterDropdown({
