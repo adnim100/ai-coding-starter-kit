@@ -138,8 +138,8 @@ export default function DashboardPage() {
         case "name-desc":
           return b.name.localeCompare(a.name);
         case "status":
-          const statusOrder = { completed: 0, processing: 1, partial: 2, failed: 3 };
-          return statusOrder[a.status] - statusOrder[b.status];
+          const statusOrder: Record<string, number> = { pending: 0, processing: 1, partial: 2, completed: 3, failed: 4 };
+          return (statusOrder[a.status] ?? 5) - (statusOrder[b.status] ?? 5);
         default:
           return 0;
       }
