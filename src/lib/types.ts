@@ -1,5 +1,5 @@
 // Project status types
-export type ProjectStatus = 'processing' | 'completed' | 'failed' | 'partial';
+export type ProjectStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'partial';
 
 // Job status types
 export type JobStatus = 'queued' | 'processing' | 'completed' | 'failed';

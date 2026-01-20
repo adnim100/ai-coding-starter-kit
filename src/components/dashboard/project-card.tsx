@@ -24,27 +24,38 @@ interface ProjectCardProps {
   onDelete?: (id: string) => void;
 }
 
-const statusConfig: Record<ProjectStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; className: string }> = {
+const statusConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; className: string }> = {
+  pending: {
+    label: "Ausstehend",
+    variant: "outline",
+    className: "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-100"
+  },
   processing: {
-    label: "Processing",
+    label: "In Bearbeitung",
     variant: "secondary",
     className: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-100"
   },
   completed: {
-    label: "Completed",
+    label: "Abgeschlossen",
     variant: "default",
     className: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100"
   },
   failed: {
-    label: "Failed",
+    label: "Fehlgeschlagen",
     variant: "destructive",
     className: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100"
   },
   partial: {
-    label: "Partial",
+    label: "Teilweise",
     variant: "outline",
     className: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-100"
   }
+};
+
+const defaultStatus = {
+  label: "Unbekannt",
+  variant: "outline" as const,
+  className: "bg-gray-100 text-gray-800"
 };
 
 export function ProjectCard({
@@ -58,7 +69,7 @@ export function ProjectCard({
   const totalJobs = project.jobs.length;
   const progressPercentage = totalJobs > 0 ? (completedJobs / totalJobs) * 100 : 0;
 
-  const statusInfo = statusConfig[project.status];
+  const statusInfo = statusConfig[project.status] || defaultStatus;
   const displayedFiles = project.audioFiles.slice(0, 3);
   const remainingFiles = project.audioFiles.length - 3;
 
