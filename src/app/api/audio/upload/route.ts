@@ -3,9 +3,10 @@ import { auth } from '@/lib/auth'
 import { createClient } from '@supabase/supabase-js'
 import { uploadAudioFile } from '@/lib/storage'
 
+// Verwende Service Role Key um RLS zu umgehen (nur serverseitig!)
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024 // 500MB
